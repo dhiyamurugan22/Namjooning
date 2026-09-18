@@ -1,122 +1,299 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import './App.css'
+import { useEffect, useState } from "react";
+import {
+  onAuthStateChanged,
+  signInWithPopup,
+  signOut,
+} from "firebase/auth";
+
+import {
+  collection,
+  addDoc,
+  getDocs,
+  updateDoc,
+  deleteDoc,
+  doc,
+} from "firebase/firestore";
+
+import {
+  auth,
+  db,
+  googleProvider,
+} from "./firebase/firebase";
 
 function App() {
-  const [count, setCount] = useState(0)
+  const [user, setUser] = useState(null);
+  const [task, setTask] = useState("");
+  const [tasks, setTasks] = useState([]);
+
+  // Check authentication state
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(
+      auth,
+      (currentUser) => {
+        setUser(currentUser);
+      }
+    );
+
+    return () => unsubscribe();
+  }, []);
+
+  // Google Sign-In
+  const handleGoogleLogin = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (error) {
+      console.error(
+        "Google Sign-In Error:",
+        error
+      );
+    }
+  };
+
+  // Sign-Out
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      setTasks([]);
+    } catch (error) {
+      console.error(
+        "Sign-Out Error:",
+        error
+      );
+    }
+  };
+
+  // Add Task
+  const handleAddTask = async () => {
+    if (!task.trim()) {
+      return;
+    }
+
+    try {
+      await addDoc(
+        collection(
+          db,
+          "users",
+          user.uid,
+          "tasks"
+        ),
+        {
+          title: task,
+          completed: false,
+        }
+      );
+
+      setTask("");
+
+      console.log(
+        "Task added successfully"
+      );
+
+      loadTasks();
+    } catch (error) {
+      console.error(
+        "Error adding task:",
+        error
+      );
+    }
+  };
+
+  // Read Tasks
+  const loadTasks = async () => {
+    if (!user) {
+      return;
+    }
+
+    try {
+      const querySnapshot =
+        await getDocs(
+          collection(
+            db,
+            "users",
+            user.uid,
+            "tasks"
+          )
+        );
+
+      const taskList =
+        querySnapshot.docs.map(
+          (taskDocument) => ({
+            id: taskDocument.id,
+            ...taskDocument.data(),
+          })
+        );
+
+      setTasks(taskList);
+
+      console.log(
+        "Tasks loaded:",
+        taskList
+      );
+    } catch (error) {
+      console.error(
+        "Error loading tasks:",
+        error
+      );
+    }
+  };
+
+  // Load tasks when user logs in
+  useEffect(() => {
+    if (user) {
+      loadTasks();
+    }
+  }, [user]);
+
+  // Update Task
+  const handleUpdateTask = async (
+    taskId,
+    oldTitle
+  ) => {
+    const newTitle = prompt(
+      "Enter the updated task:",
+      oldTitle
+    );
+
+    if (
+      !newTitle ||
+      !newTitle.trim()
+    ) {
+      return;
+    }
+
+    try {
+      const taskRef = doc(
+        db,
+        "users",
+        user.uid,
+        "tasks",
+        taskId
+      );
+
+      await updateDoc(taskRef, {
+        title: newTitle.trim(),
+      });
+
+      console.log(
+        "Task updated successfully"
+      );
+
+      loadTasks();
+    } catch (error) {
+      console.error(
+        "Error updating task:",
+        error
+      );
+    }
+  };
+
+  // Delete Task
+  const handleDeleteTask = async (
+    taskId
+  ) => {
+    try {
+      const taskRef = doc(
+        db,
+        "users",
+        user.uid,
+        "tasks",
+        taskId
+      );
+
+      await deleteDoc(taskRef);
+
+      console.log(
+        "Task deleted successfully"
+      );
+
+      loadTasks();
+    } catch (error) {
+      console.error(
+        "Error deleting task:",
+        error
+      );
+    }
+  };
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
+    <div>
+      <h1>To-Do List</h1>
+
+      {user ? (
         <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
-          </p>
+          <h2>
+            Welcome, {user.displayName}!
+          </h2>
+
+          <p>{user.email}</p>
+
+          {/* Add Task */}
+          <input
+            type="text"
+            placeholder="Enter a task"
+            value={task}
+            onChange={(e) =>
+              setTask(e.target.value)
+            }
+          />
+
+          <button
+            onClick={handleAddTask}
+          >
+            Add Task
+          </button>
+
+          {/* Display Tasks */}
+          <h2>Your Tasks</h2>
+
+          {tasks.length === 0 ? (
+            <p>No tasks yet.</p>
+          ) : (
+            <ul>
+              {tasks.map((item) => (
+                <li key={item.id}>
+                  {item.title}
+
+                  <button
+                    onClick={() =>
+                      handleUpdateTask(
+                        item.id,
+                        item.title
+                      )
+                    }
+                  >
+                    Edit
+                  </button>
+
+                  <button
+                    onClick={() =>
+                      handleDeleteTask(
+                        item.id
+                      )
+                    }
+                  >
+                    Delete
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {/* Sign Out */}
+          <button
+            onClick={handleLogout}
+          >
+            Sign Out
+          </button>
         </div>
+      ) : (
         <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
+          onClick={handleGoogleLogin}
         >
-          Count is {count}
+          Sign in with Google
         </button>
-      </section>
-
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+      )}
+    </div>
+  );
 }
 
-export default App
+export default App;
