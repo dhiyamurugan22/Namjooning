@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+
 import {
   onAuthStateChanged,
   signInWithPopup,
@@ -20,29 +21,191 @@ import {
   googleProvider,
 } from "./firebase/firebase";
 
-function App() {
-  const [user, setUser] = useState(null);
+import {
+  Calendar,
+  dateFnsLocalizer,
+} from "react-big-calendar";
 
-  const [task, setTask] = useState("");
-  const [taskDate, setTaskDate] = useState("");
-  const [taskTime, setTaskTime] = useState("");
+import {
+  format,
+  parse,
+  startOfWeek,
+  getDay,
+} from "date-fns";
+
+import { enUS } from "date-fns/locale";
+
+import "react-big-calendar/lib/css/react-big-calendar.css";
+import "./App.css";
+
+const locales = {
+  "en-US": enUS,
+};
+
+const localizer = dateFnsLocalizer({
+  format,
+  parse,
+  startOfWeek,
+  getDay,
+  locales,
+});
+
+function App() {
+  // =========================
+  // AUTH STATE
+  // =========================
+
+  const [user, setUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
+  // =========================
+  // TASK STATE
+  // =========================
 
   const [tasks, setTasks] = useState([]);
 
-  // Check authentication state
+  const [taskTitle, setTaskTitle] = useState("");
+  const [category, setCategory] = useState("");
+  const [dueDate, setDueDate] = useState("");
+  const [dueTime, setDueTime] = useState("");
+
+  const [editingId, setEditingId] = useState(null);
+
+  // =========================
+  // UI STATE
+  // =========================
+
+  const [tasksLoading, setTasksLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState(null);
+  const [togglingId, setTogglingId] = useState(null);
+
+  const [errorMessage, setErrorMessage] = useState("");
+
+  const [toast, setToast] = useState({
+    show: false,
+    message: "",
+    type: "success",
+  });
+
+  const [deleteTask, setDeleteTask] = useState(null);
+
+  const [selectedCategory, setSelectedCategory] =
+    useState("All Categories");
+
+  // =========================
+  // CALENDAR STATE
+  // =========================
+
+  const [calendarDate, setCalendarDate] =
+    useState(new Date());
+
+  const [calendarView, setCalendarView] =
+    useState("month");
+
+  // =========================
+  // REF
+  // =========================
+
+  const taskInputRef = useRef(null);
+
+  // =========================
+  // AUTH LISTENER
+  // =========================
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(
       auth,
       (currentUser) => {
         setUser(currentUser);
+        setAuthLoading(false);
       }
     );
 
     return () => unsubscribe();
   }, []);
 
-  // Google Sign-In
-  const handleGoogleLogin = async () => {
+  // =========================
+  // FETCH TASKS
+  // =========================
+
+  useEffect(() => {
+    if (!user) {
+      setTasks([]);
+      return;
+    }
+
+    fetchTasks();
+  }, [user]);
+
+  const fetchTasks = async () => {
+    if (!user) return;
+
+    setTasksLoading(true);
+    setErrorMessage("");
+
+    try {
+      const tasksRef = collection(
+        db,
+        "users",
+        user.uid,
+        "tasks"
+      );
+
+      const snapshot = await getDocs(tasksRef);
+
+      const taskList = snapshot.docs.map(
+        (taskDoc) => ({
+          id: taskDoc.id,
+          ...taskDoc.data(),
+        })
+      );
+
+      setTasks(taskList);
+    } catch (error) {
+      console.error(
+        "Error fetching tasks:",
+        error
+      );
+
+      setErrorMessage(
+        "Unable to load your tasks. Please try again."
+      );
+    } finally {
+      setTasksLoading(false);
+    }
+  };
+
+  // =========================
+  // TOAST
+  // =========================
+
+  const showToast = (
+    message,
+    type = "success"
+  ) => {
+    setToast({
+      show: true,
+      message,
+      type,
+    });
+
+    setTimeout(() => {
+      setToast({
+        show: false,
+        message: "",
+        type: "success",
+      });
+    }, 3000);
+  };
+
+  // =========================
+  // LOGIN
+  // =========================
+
+  const handleLogin = async () => {
+    setErrorMessage("");
+
     try {
       await signInWithPopup(
         auth,
@@ -50,343 +213,1330 @@ function App() {
       );
     } catch (error) {
       console.error(
-        "Google Sign-In Error:",
+        "Login error:",
         error
       );
+
+      if (
+        error.code !==
+        "auth/popup-closed-by-user"
+      ) {
+        setErrorMessage(
+          "Unable to sign in. Please try again."
+        );
+      }
     }
   };
 
-  // Sign-Out
+  // =========================
+  // LOGOUT
+  // =========================
+
   const handleLogout = async () => {
     try {
       await signOut(auth);
 
-      setTasks([]);
+      showToast(
+        "Signed out successfully."
+      );
     } catch (error) {
       console.error(
-        "Sign-Out Error:",
+        "Logout error:",
         error
+      );
+
+      setErrorMessage(
+        "Unable to sign out. Please try again."
       );
     }
   };
 
-  // Add Task
-  const handleAddTask = async () => {
-    if (!task.trim()) {
+  // =========================
+  // SUBMIT TASK
+  // =========================
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+
+    if (!taskTitle.trim()) {
+      setErrorMessage(
+        "Please enter a task title."
+      );
+
+      taskInputRef.current?.focus();
+
       return;
     }
 
+    const finalCategory =
+      category.trim() || "Uncategorized";
+
+    setSaving(true);
+    setErrorMessage("");
+
     try {
-      await addDoc(
-        collection(
+      // =========================
+      // UPDATE EXISTING TASK
+      // =========================
+
+      if (editingId) {
+        const existingTask =
+          tasks.find(
+            (task) =>
+              task.id === editingId
+          );
+
+        const taskRef = doc(
+          db,
+          "users",
+          user.uid,
+          "tasks",
+          editingId
+        );
+
+        const updatedTaskData = {
+          title: taskTitle.trim(),
+          category: finalCategory,
+          completed:
+            existingTask?.completed ||
+            false,
+          dueDate: dueDate || "",
+          dueTime: dueTime || "",
+        };
+
+        await updateDoc(
+          taskRef,
+          updatedTaskData
+        );
+
+        setTasks((previousTasks) =>
+          previousTasks.map((task) =>
+            task.id === editingId
+              ? {
+                ...task,
+                ...updatedTaskData,
+              }
+              : task
+          )
+        );
+
+        showToast(
+          "Task updated successfully."
+        );
+      }
+
+      // =========================
+      // CREATE NEW TASK
+      // =========================
+
+      else {
+        const tasksRef = collection(
           db,
           "users",
           user.uid,
           "tasks"
-        ),
-        {
-          title: task.trim(),
+        );
+
+        const newTaskData = {
+          title: taskTitle.trim(),
+          category: finalCategory,
           completed: false,
-          dueDate: taskDate,
-          dueTime: taskTime,
-        }
-      );
+          dueDate: dueDate || "",
+          dueTime: dueTime || "",
+        };
 
-      setTask("");
-      setTaskDate("");
-      setTaskTime("");
+        const newTask =
+          await addDoc(
+            tasksRef,
+            newTaskData
+          );
 
-      console.log(
-        "Task added successfully"
-      );
+        setTasks((previousTasks) => [
+          ...previousTasks,
+          {
+            id: newTask.id,
+            ...newTaskData,
+          },
+        ]);
 
-      loadTasks();
+        showToast(
+          "Task added successfully."
+        );
+      }
+
+      // Clear form
+      setEditingId(null);
+      setTaskTitle("");
+      setCategory("");
+      setDueDate("");
+      setDueTime("");
     } catch (error) {
       console.error(
-        "Error adding task:",
+        "Error saving task:",
         error
       );
+
+      setErrorMessage(
+        "Unable to save the task. Please try again."
+      );
+    } finally {
+      setSaving(false);
     }
   };
 
-  // Read Tasks
-  const loadTasks = async () => {
-    if (!user) {
-      return;
-    }
+  // =========================
+  // EDIT TASK
+  // =========================
 
-    try {
-      const querySnapshot =
-        await getDocs(
-          collection(
-            db,
-            "users",
-            user.uid,
-            "tasks"
-          )
-        );
+  const handleEdit = (task) => {
+    setEditingId(task.id);
 
-      const taskList =
-        querySnapshot.docs.map(
-          (taskDocument) => ({
-            id: taskDocument.id,
-            ...taskDocument.data(),
-          })
-        );
-
-      setTasks(taskList);
-
-      console.log(
-        "Tasks loaded:",
-        taskList
-      );
-    } catch (error) {
-      console.error(
-        "Error loading tasks:",
-        error
-      );
-    }
-  };
-
-  // Load tasks when user logs in
-  useEffect(() => {
-    if (user) {
-      loadTasks();
-    }
-  }, [user]);
-
-  // Update Task
-  const handleUpdateTask = async (
-    taskId,
-    oldTitle
-  ) => {
-    const newTitle = prompt(
-      "Enter the updated task:",
-      oldTitle
+    setTaskTitle(
+      task.title || ""
     );
 
-    if (
-      !newTitle ||
-      !newTitle.trim()
-    ) {
-      return;
-    }
+    setCategory(
+      task.category ||
+      "Uncategorized"
+    );
 
-    try {
-      const taskRef = doc(
-        db,
-        "users",
-        user.uid,
-        "tasks",
-        taskId
-      );
+    setDueDate(
+      task.dueDate || ""
+    );
 
-      await updateDoc(taskRef, {
-        title: newTitle.trim(),
-      });
+    setDueTime(
+      task.dueTime || ""
+    );
 
-      console.log(
-        "Task updated successfully"
-      );
+    setErrorMessage("");
 
-      loadTasks();
-    } catch (error) {
-      console.error(
-        "Error updating task:",
-        error
-      );
-    }
+    window.scrollTo({
+      top: 0,
+      behavior: "smooth",
+    });
+
+    setTimeout(() => {
+      taskInputRef.current?.focus();
+    }, 400);
   };
 
-  // Delete Task
-  const handleDeleteTask = async (
-    taskId
-  ) => {
+  // =========================
+  // DELETE
+  // =========================
+
+  const handleDelete = async () => {
+    if (!deleteTask) return;
+
+    setDeletingId(deleteTask.id);
+    setErrorMessage("");
+
     try {
       const taskRef = doc(
         db,
         "users",
         user.uid,
         "tasks",
-        taskId
+        deleteTask.id
       );
 
       await deleteDoc(taskRef);
 
-      console.log(
-        "Task deleted successfully"
+      setTasks((previousTasks) =>
+        previousTasks.filter(
+          (task) =>
+            task.id !== deleteTask.id
+        )
       );
 
-      loadTasks();
+      if (
+        editingId === deleteTask.id
+      ) {
+        handleCancelEdit();
+      }
+
+      showToast(
+        "Task deleted successfully."
+      );
+
+      setDeleteTask(null);
     } catch (error) {
       console.error(
         "Error deleting task:",
         error
       );
+
+      setErrorMessage(
+        "Unable to delete the task. Please try again."
+      );
+    } finally {
+      setDeletingId(null);
     }
   };
 
-  // Complete / Uncomplete Task
-  const handleToggleTask = async (
-    taskId,
-    currentStatus
+  // =========================
+  // COMPLETE / UNCOMPLETE
+  // =========================
+
+  const handleToggleComplete = async (
+    task
   ) => {
+    setTogglingId(task.id);
+    setErrorMessage("");
+
     try {
       const taskRef = doc(
         db,
         "users",
         user.uid,
         "tasks",
-        taskId
+        task.id
       );
 
-      await updateDoc(taskRef, {
-        completed: !currentStatus,
-      });
+      const newCompletedState =
+        !task.completed;
 
-      console.log(
-        "Task status updated"
+      await updateDoc(
+        taskRef,
+        {
+          completed:
+            newCompletedState,
+        }
       );
 
-      loadTasks();
+      setTasks((previousTasks) =>
+        previousTasks.map((item) =>
+          item.id === task.id
+            ? {
+              ...item,
+              completed:
+                newCompletedState,
+            }
+            : item
+        )
+      );
+
+      showToast(
+        newCompletedState
+          ? "Task completed."
+          : "Task marked as incomplete."
+      );
     } catch (error) {
       console.error(
-        "Error updating task status:",
+        "Error updating task:",
         error
       );
+
+      setErrorMessage(
+        "Unable to update the task. Please try again."
+      );
+    } finally {
+      setTogglingId(null);
     }
   };
 
-  return (
-    <div>
-      <h1>To-Do List</h1>
+  // =========================
+  // CANCEL EDIT
+  // =========================
 
-      {user ? (
-        <div>
-          <h2>
-            Welcome, {user.displayName}!
-          </h2>
+  const handleCancelEdit = () => {
+    setEditingId(null);
+    setTaskTitle("");
+    setCategory("");
+    setDueDate("");
+    setDueTime("");
+    setErrorMessage("");
+  };
 
-          <p>{user.email}</p>
+  // =========================
+  // CATEGORIES
+  // =========================
 
-          {/* Add Task */}
-          <input
-            type="text"
-            placeholder="Enter a task"
-            value={task}
-            onChange={(e) =>
-              setTask(e.target.value)
-            }
-          />
+  const categories = [
+    ...new Set(
+      tasks.map(
+        (task) =>
+          task.category?.trim() ||
+          "Uncategorized"
+      )
+    ),
+  ].sort();
 
-          {/* Due Date */}
-          <input
-            type="date"
-            value={taskDate}
-            onChange={(e) =>
-              setTaskDate(e.target.value)
-            }
-          />
+  // =========================
+  // FILTER TASKS
+  // =========================
 
-          {/* Due Time */}
-          <input
-            type="time"
-            value={taskTime}
-            onChange={(e) =>
-              setTaskTime(e.target.value)
-            }
-          />
+  const filteredTasks =
+    selectedCategory ===
+      "All Categories"
+      ? tasks
+      : tasks.filter(
+        (task) =>
+          (task.category?.trim() ||
+            "Uncategorized") ===
+          selectedCategory
+      );
 
-          <button
-            onClick={handleAddTask}
-          >
-            Add Task
-          </button>
+  // =========================
+  // GROUP TASKS
+  // =========================
 
-          {/* Display Tasks */}
-          <h2>Your Tasks</h2>
+  const groupedTasks =
+    filteredTasks.reduce(
+      (groups, task) => {
+        const taskCategory =
+          task.category?.trim() ||
+          "Uncategorized";
 
-          {tasks.length === 0 ? (
-            <p>No tasks yet.</p>
-          ) : (
-            <ul>
-              {tasks.map((item) => (
-                <li key={item.id}>
-                  {/* Complete / Uncomplete */}
-                  <input
-                    type="checkbox"
-                    checked={
-                      item.completed || false
-                    }
-                    onChange={() =>
-                      handleToggleTask(
-                        item.id,
-                        item.completed || false
-                      )
-                    }
-                  />
+        if (!groups[taskCategory]) {
+          groups[taskCategory] = [];
+        }
 
-                  <span>
-                    {item.title}
-                  </span>
+        groups[taskCategory].push(task);
 
-                  {/* Due Date */}
-                  {item.dueDate && (
-                    <span>
-                      {" "}
-                      - Due: {item.dueDate}
-                    </span>
-                  )}
+        return groups;
+      },
+      {}
+    );
 
-                  {/* Due Time */}
-                  {item.dueTime && (
-                    <span>
-                      {" "}
-                      at {item.dueTime}
-                    </span>
-                  )}
+  // =========================
+  // TASK STATISTICS
+  // =========================
 
-                  {/* Edit */}
-                  <button
-                    onClick={() =>
-                      handleUpdateTask(
-                        item.id,
-                        item.title
-                      )
-                    }
-                  >
-                    Edit
-                  </button>
+  const completedTaskCount =
+    tasks.filter(
+      (task) => task.completed
+    ).length;
 
-                  {/* Delete */}
-                  <button
-                    onClick={() =>
-                      handleDeleteTask(
-                        item.id
-                      )
-                    }
-                  >
-                    Delete
-                  </button>
-                </li>
-              ))}
-            </ul>
+  const pendingTaskCount =
+    tasks.length -
+    completedTaskCount;
+
+  // =========================
+  // CALENDAR EVENTS
+  // =========================
+
+  const calendarEvents = tasks
+    .filter(
+      (task) => task.dueDate
+    )
+    .map((task) => {
+      const [
+        year,
+        month,
+        day,
+      ] = task.dueDate
+        .split("-")
+        .map(Number);
+
+      let hour = 0;
+      let minute = 0;
+
+      if (task.dueTime) {
+        const [
+          selectedHour,
+          selectedMinute,
+        ] = task.dueTime
+          .split(":")
+          .map(Number);
+
+        hour = selectedHour;
+        minute = selectedMinute;
+      }
+
+      const start = new Date(
+        year,
+        month - 1,
+        day,
+        hour,
+        minute
+      );
+
+      const end = new Date(
+        start.getTime() +
+        60 * 60 * 1000
+      );
+
+      return {
+        id: task.id,
+        title: task.title,
+        start,
+        end,
+        completed:
+          task.completed,
+        category:
+          task.category ||
+          "Uncategorized",
+      };
+    });
+
+  // =========================
+  // CALENDAR NAVIGATION
+  // =========================
+
+  const handleCalendarNavigate = (
+    newDate
+  ) => {
+    setCalendarDate(newDate);
+  };
+
+  const handleCalendarView = (
+    newView
+  ) => {
+    setCalendarView(newView);
+  };
+
+  // =========================
+  // CALENDAR EVENT CLICK
+  // =========================
+
+  const handleCalendarEventClick = (
+    event
+  ) => {
+    const task = tasks.find(
+      (item) =>
+        item.id === event.id
+    );
+
+    if (task) {
+      handleEdit(task);
+    }
+  };
+
+  // =========================
+  // CALENDAR STYLES
+  // =========================
+
+  const slotPropGetter = () => {
+    return {
+      style: {
+        backgroundColor:
+          "#1f2027",
+        color: "white",
+        borderTop:
+          "1px solid #333",
+      },
+    };
+  };
+
+  const dayPropGetter = () => {
+    return {
+      style: {
+        backgroundColor:
+          "#1f2027",
+        color: "white",
+      },
+    };
+  };
+
+  const eventPropGetter = (
+    event
+  ) => {
+    return {
+      style: {
+        backgroundColor:
+          event.completed
+            ? "#555"
+            : "#6c5ce7",
+        color: "white",
+        border: "none",
+        borderRadius: "4px",
+        padding: "3px 5px",
+        cursor: "pointer",
+      },
+    };
+  };
+
+  // =========================
+  // AUTH LOADING SCREEN
+  // =========================
+
+  if (authLoading) {
+    return (
+      <div className="loading-page">
+        <div className="loading-card">
+          <div className="spinner"></div>
+
+          <p>
+            Loading your To-Do List...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // =========================
+  // LOGIN PAGE
+  // =========================
+
+  if (!user) {
+    return (
+      <div className="login-page">
+
+        <div className="login-box">
+
+          <div className="login-icon">
+            ✓
+          </div>
+
+          <h1>
+            To-Do List
+          </h1>
+
+          <p>
+            Organize your tasks,
+            stay focused.
+          </p>
+
+          {errorMessage && (
+            <div className="error-message">
+              {errorMessage}
+            </div>
           )}
 
-          {/* Sign Out */}
           <button
-            onClick={handleLogout}
+            className="login-button"
+            onClick={handleLogin}
           >
-            Sign Out
+            Sign in with Google
           </button>
+
         </div>
-      ) : (
-        <button
-          onClick={handleGoogleLogin}
+
+      </div>
+    );
+  }
+
+  // =========================
+  // MAIN APP
+  // =========================
+
+  return (
+    <div className="app-container">
+
+      {/* =========================
+          TOAST
+      ========================= */}
+
+      {toast.show && (
+        <div
+          className={`toast toast-${toast.type}`}
         >
-          Sign in with Google
-        </button>
+          <span className="toast-icon">
+            {toast.type === "success"
+              ? "✓"
+              : "!"}
+          </span>
+
+          <span>
+            {toast.message}
+          </span>
+        </div>
       )}
+
+      {/* =========================
+          HEADER
+      ========================= */}
+
+      <header className="app-header">
+
+        <div>
+          <h1>
+            ✓ To-Do List
+          </h1>
+
+          <p>
+            Welcome,{" "}
+            {user.displayName ||
+              user.email}
+          </p>
+        </div>
+
+        <button
+          className="signout-button"
+          onClick={handleLogout}
+        >
+          Sign Out
+        </button>
+
+      </header>
+
+      <main>
+
+        {/* =========================
+            ERROR MESSAGE
+        ========================= */}
+
+        {errorMessage && (
+          <div className="global-error">
+            <span>⚠</span>
+
+            <span>
+              {errorMessage}
+            </span>
+
+            <button
+              onClick={() =>
+                setErrorMessage("")
+              }
+            >
+              ×
+            </button>
+          </div>
+        )}
+
+        {/* =========================
+            ADD / EDIT TASK
+        ========================= */}
+
+        <section className="task-form-section">
+
+          <div className="section-heading">
+
+            <div>
+              <span className="section-label">
+                {editingId
+                  ? "TASK MANAGEMENT"
+                  : "GET STARTED"}
+              </span>
+
+              <h2>
+                {editingId
+                  ? "Edit Task"
+                  : "Add New Task"}
+              </h2>
+            </div>
+
+            {editingId && (
+              <button
+                type="button"
+                className="top-cancel-button"
+                onClick={
+                  handleCancelEdit
+                }
+              >
+                Cancel Edit
+              </button>
+            )}
+
+          </div>
+
+          <form
+            onSubmit={handleSubmit}
+            className="task-form"
+          >
+
+            <div className="form-field">
+
+              <label>
+                Task
+                <span className="required">
+                  *
+                </span>
+              </label>
+
+              <input
+                ref={taskInputRef}
+                type="text"
+                placeholder="What needs to be done?"
+                value={taskTitle}
+                onChange={(event) =>
+                  setTaskTitle(
+                    event.target.value
+                  )
+                }
+              />
+
+            </div>
+
+            <div className="form-field">
+
+              <label>
+                Category
+              </label>
+
+              <input
+                type="text"
+                list="category-options"
+                placeholder="e.g. DSA, Java, Personal"
+                value={category}
+                onChange={(event) =>
+                  setCategory(
+                    event.target.value
+                  )
+                }
+              />
+
+              <datalist id="category-options">
+                {categories.map(
+                  (item) => (
+                    <option
+                      value={item}
+                      key={item}
+                    />
+                  )
+                )}
+              </datalist>
+
+            </div>
+
+            <div className="form-field">
+
+              <label>
+                Due Date
+              </label>
+
+              <input
+                type="date"
+                value={dueDate}
+                onChange={(event) =>
+                  setDueDate(
+                    event.target.value
+                  )
+                }
+              />
+
+            </div>
+
+            <div className="form-field">
+
+              <label>
+                Due Time
+              </label>
+
+              <input
+                type="time"
+                value={dueTime}
+                onChange={(event) =>
+                  setDueTime(
+                    event.target.value
+                  )
+                }
+              />
+
+            </div>
+
+            <div className="form-buttons">
+
+              <button
+                type="submit"
+                className="add-button"
+                disabled={saving}
+              >
+                {saving ? (
+                  <>
+                    <span className="button-spinner"></span>
+
+                    {editingId
+                      ? "Updating..."
+                      : "Adding..."}
+                  </>
+                ) : (
+                  editingId
+                    ? "Update Task"
+                    : "Add Task"
+                )}
+              </button>
+
+              {editingId && (
+                <button
+                  type="button"
+                  className="cancel-button"
+                  onClick={
+                    handleCancelEdit
+                  }
+                  disabled={saving}
+                >
+                  Cancel
+                </button>
+              )}
+
+            </div>
+
+          </form>
+
+        </section>
+
+        {/* =========================
+            TASKS
+        ========================= */}
+
+        <section className="tasks-section">
+
+          <div className="tasks-header">
+
+            <div>
+              <span className="section-label">
+                YOUR WORK
+              </span>
+
+              <h2>
+                Tasks
+              </h2>
+            </div>
+
+            <select
+              value={selectedCategory}
+              onChange={(event) =>
+                setSelectedCategory(
+                  event.target.value
+                )
+              }
+              disabled={tasksLoading}
+            >
+              <option>
+                All Categories
+              </option>
+
+              {categories.map(
+                (item) => (
+                  <option
+                    value={item}
+                    key={item}
+                  >
+                    {item}
+                  </option>
+                )
+              )}
+            </select>
+
+          </div>
+
+          {/* TASK SUMMARY */}
+
+          {!tasksLoading &&
+            tasks.length > 0 && (
+              <div className="task-summary">
+
+                <span>
+                  <strong>
+                    {tasks.length}
+                  </strong>{" "}
+                  {tasks.length === 1
+                    ? "task"
+                    : "tasks"}
+                </span>
+
+                <span className="summary-dot">
+                  •
+                </span>
+
+                <span>
+                  <strong>
+                    {pendingTaskCount}
+                  </strong>{" "}
+                  pending
+                </span>
+
+                <span className="summary-dot">
+                  •
+                </span>
+
+                <span>
+                  <strong>
+                    {completedTaskCount}
+                  </strong>{" "}
+                  completed
+                </span>
+
+              </div>
+            )}
+
+          {/* LOADING */}
+
+          {tasksLoading ? (
+            <div className="empty-state">
+
+              <div className="spinner"></div>
+
+              <h3>
+                Loading your tasks...
+              </h3>
+
+              <p>
+                Just a moment.
+              </p>
+
+            </div>
+          ) : tasks.length === 0 ? (
+
+            /* EMPTY STATE */
+
+            <div className="empty-state">
+
+              <div className="empty-icon">
+                ✓
+              </div>
+
+              <h3>
+                No tasks yet
+              </h3>
+
+              <p>
+                Add your first task
+                and start organizing
+                your day.
+              </p>
+
+              <button
+                className="empty-action"
+                onClick={() => {
+                  taskInputRef.current?.focus();
+
+                  window.scrollTo({
+                    top: 0,
+                    behavior: "smooth",
+                  });
+                }}
+              >
+                + Add Your First Task
+              </button>
+
+            </div>
+
+          ) : filteredTasks.length ===
+            0 ? (
+
+            /* FILTER EMPTY STATE */
+
+            <div className="empty-state">
+
+              <div className="empty-icon">
+                📁
+              </div>
+
+              <h3>
+                No tasks in this category
+              </h3>
+
+              <p>
+                Try selecting another
+                category.
+              </p>
+
+              <button
+                className="empty-action"
+                onClick={() =>
+                  setSelectedCategory(
+                    "All Categories"
+                  )
+                }
+              >
+                View All Tasks
+              </button>
+
+            </div>
+
+          ) : (
+
+            /* TASK GROUPS */
+
+            <div className="category-list">
+
+              {Object.entries(
+                groupedTasks
+              ).map(
+                ([
+                  categoryName,
+                  categoryTasks,
+                ]) => (
+
+                  <div
+                    className="category-section"
+                    key={categoryName}
+                  >
+
+                    <div className="category-title">
+
+                      <span className="category-icon">
+                        📁
+                      </span>
+
+                      <h3>
+                        {categoryName}
+                      </h3>
+
+                      <span className="category-count">
+                        {
+                          categoryTasks.length
+                        }
+                      </span>
+
+                    </div>
+
+                    <div className="task-list">
+
+                      {categoryTasks.map(
+                        (task) => (
+
+                          <div
+                            className={`task-item ${task.completed
+                                ? "completed"
+                                : ""
+                              }`}
+                            key={task.id}
+                          >
+
+                            <div className="task-left">
+
+                              <input
+                                type="checkbox"
+                                checked={
+                                  task.completed ||
+                                  false
+                                }
+                                disabled={
+                                  togglingId ===
+                                  task.id
+                                }
+                                onChange={() =>
+                                  handleToggleComplete(
+                                    task
+                                  )
+                                }
+                              />
+
+                              <div className="task-info">
+
+                                <h3>
+                                  {task.title}
+                                </h3>
+
+                                {task.dueDate && (
+                                  <p className="due-info">
+                                    📅{" "}
+                                    {task.dueDate}
+
+                                    {task.dueTime &&
+                                      ` • ${task.dueTime}`}
+                                  </p>
+                                )}
+
+                              </div>
+
+                            </div>
+
+                            <div className="task-actions">
+
+                              <button
+                                onClick={() =>
+                                  handleEdit(
+                                    task
+                                  )
+                                }
+                                disabled={
+                                  deletingId ===
+                                  task.id ||
+                                  togglingId ===
+                                  task.id
+                                }
+                              >
+                                Edit
+                              </button>
+
+                              <button
+                                className="delete-button"
+                                onClick={() =>
+                                  setDeleteTask(
+                                    task
+                                  )
+                                }
+                                disabled={
+                                  deletingId ===
+                                  task.id ||
+                                  togglingId ===
+                                  task.id
+                                }
+                              >
+                                Delete
+                              </button>
+
+                            </div>
+
+                          </div>
+
+                        )
+                      )}
+
+                    </div>
+
+                  </div>
+
+                )
+              )}
+
+            </div>
+
+          )}
+
+        </section>
+
+        {/* =========================
+            CALENDAR
+        ========================= */}
+
+        <section className="calendar-section">
+
+          <div className="calendar-heading">
+
+            <div>
+              <span className="section-label">
+                DEADLINES
+              </span>
+
+              <h2>
+                Calendar
+              </h2>
+            </div>
+
+            <p>
+              Click a task to edit it.
+            </p>
+
+          </div>
+
+          <div className="calendar-container">
+
+            <Calendar
+              localizer={localizer}
+              events={calendarEvents}
+              startAccessor="start"
+              endAccessor="end"
+              date={calendarDate}
+              view={calendarView}
+              onNavigate={
+                handleCalendarNavigate
+              }
+              onView={
+                handleCalendarView
+              }
+              onSelectEvent={
+                handleCalendarEventClick
+              }
+              views={[
+                "month",
+                "week",
+                "day",
+                "agenda",
+              ]}
+              popup={true}
+              slotPropGetter={
+                slotPropGetter
+              }
+              dayPropGetter={
+                dayPropGetter
+              }
+              eventPropGetter={
+                eventPropGetter
+              }
+              style={{
+                height: "700px",
+              }}
+            />
+
+          </div>
+
+        </section>
+
+      </main>
+
+      {/* =========================
+          FOOTER
+      ========================= */}
+
+      <footer className="app-footer">
+
+        <p>
+          Stay organized. Stay focused.
+        </p>
+
+        <button
+          onClick={handleLogout}
+        >
+          Sign Out
+        </button>
+
+      </footer>
+
+      {/* =========================
+          DELETE MODAL
+      ========================= */}
+
+      {deleteTask && (
+        <div
+          className="modal-overlay"
+          onClick={() =>
+            deletingId === null &&
+            setDeleteTask(null)
+          }
+        >
+
+          <div
+            className="delete-modal"
+            onClick={(event) =>
+              event.stopPropagation()
+            }
+          >
+
+            <div className="modal-icon">
+              !
+            </div>
+
+            <h2>
+              Delete Task?
+            </h2>
+
+            <p>
+              Are you sure you want to
+              delete
+              <strong>
+                {" "}
+                "{deleteTask.title}"
+              </strong>
+              ?
+            </p>
+
+            <p className="modal-warning">
+              This action cannot be undone.
+            </p>
+
+            <div className="modal-actions">
+
+              <button
+                className="modal-cancel"
+                onClick={() =>
+                  setDeleteTask(null)
+                }
+                disabled={
+                  deletingId !== null
+                }
+              >
+                Cancel
+              </button>
+
+              <button
+                className="modal-delete"
+                onClick={handleDelete}
+                disabled={
+                  deletingId !== null
+                }
+              >
+                {deletingId ? (
+                  <>
+                    <span className="button-spinner"></span>
+                    Deleting...
+                  </>
+                ) : (
+                  "Delete Task"
+                )}
+              </button>
+
+            </div>
+
+          </div>
+
+        </div>
+      )}
+
     </div>
   );
 }
