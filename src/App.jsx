@@ -22,7 +22,11 @@ import {
 
 function App() {
   const [user, setUser] = useState(null);
+
   const [task, setTask] = useState("");
+  const [taskDate, setTaskDate] = useState("");
+  const [taskTime, setTaskTime] = useState("");
+
   const [tasks, setTasks] = useState([]);
 
   // Check authentication state
@@ -40,7 +44,10 @@ function App() {
   // Google Sign-In
   const handleGoogleLogin = async () => {
     try {
-      await signInWithPopup(auth, googleProvider);
+      await signInWithPopup(
+        auth,
+        googleProvider
+      );
     } catch (error) {
       console.error(
         "Google Sign-In Error:",
@@ -53,6 +60,7 @@ function App() {
   const handleLogout = async () => {
     try {
       await signOut(auth);
+
       setTasks([]);
     } catch (error) {
       console.error(
@@ -77,12 +85,16 @@ function App() {
           "tasks"
         ),
         {
-          title: task,
+          title: task.trim(),
           completed: false,
+          dueDate: taskDate,
+          dueTime: taskTime,
         }
       );
 
       setTask("");
+      setTaskDate("");
+      setTaskTime("");
 
       console.log(
         "Task added successfully"
@@ -214,6 +226,37 @@ function App() {
     }
   };
 
+  // Complete / Uncomplete Task
+  const handleToggleTask = async (
+    taskId,
+    currentStatus
+  ) => {
+    try {
+      const taskRef = doc(
+        db,
+        "users",
+        user.uid,
+        "tasks",
+        taskId
+      );
+
+      await updateDoc(taskRef, {
+        completed: !currentStatus,
+      });
+
+      console.log(
+        "Task status updated"
+      );
+
+      loadTasks();
+    } catch (error) {
+      console.error(
+        "Error updating task status:",
+        error
+      );
+    }
+  };
+
   return (
     <div>
       <h1>To-Do List</h1>
@@ -236,6 +279,24 @@ function App() {
             }
           />
 
+          {/* Due Date */}
+          <input
+            type="date"
+            value={taskDate}
+            onChange={(e) =>
+              setTaskDate(e.target.value)
+            }
+          />
+
+          {/* Due Time */}
+          <input
+            type="time"
+            value={taskTime}
+            onChange={(e) =>
+              setTaskTime(e.target.value)
+            }
+          />
+
           <button
             onClick={handleAddTask}
           >
@@ -251,8 +312,41 @@ function App() {
             <ul>
               {tasks.map((item) => (
                 <li key={item.id}>
-                  {item.title}
+                  {/* Complete / Uncomplete */}
+                  <input
+                    type="checkbox"
+                    checked={
+                      item.completed || false
+                    }
+                    onChange={() =>
+                      handleToggleTask(
+                        item.id,
+                        item.completed || false
+                      )
+                    }
+                  />
 
+                  <span>
+                    {item.title}
+                  </span>
+
+                  {/* Due Date */}
+                  {item.dueDate && (
+                    <span>
+                      {" "}
+                      - Due: {item.dueDate}
+                    </span>
+                  )}
+
+                  {/* Due Time */}
+                  {item.dueTime && (
+                    <span>
+                      {" "}
+                      at {item.dueTime}
+                    </span>
+                  )}
+
+                  {/* Edit */}
                   <button
                     onClick={() =>
                       handleUpdateTask(
@@ -264,6 +358,7 @@ function App() {
                     Edit
                   </button>
 
+                  {/* Delete */}
                   <button
                     onClick={() =>
                       handleDeleteTask(
