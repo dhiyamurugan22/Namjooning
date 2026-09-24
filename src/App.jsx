@@ -35,30 +35,6 @@ import {
 
 import { enUS } from "date-fns/locale";
 
-import {
-  Home,
-  ListTodo,
-  CalendarDays,
-  Tags,
-  Settings,
-  Search,
-  Plus,
-  LogOut,
-  CheckCircle2,
-  Circle,
-  Clock3,
-  Edit3,
-  Trash2,
-  X,
-  Menu,
-  ChevronRight,
-  ClipboardList,
-  AlertCircle,
-  Check,
-  FolderOpen,
-  LayoutDashboard,
-} from "lucide-react";
-
 import "react-big-calendar/lib/css/react-big-calendar.css";
 import "./App.css";
 
@@ -76,7 +52,7 @@ const localizer = dateFnsLocalizer({
 
 function App() {
   // =========================
-  // AUTH
+  // AUTH STATE
   // =========================
 
   const [user, setUser] = useState(null);
@@ -91,7 +67,10 @@ function App() {
   const [taskTitle, setTaskTitle] = useState("");
   const [category, setCategory] = useState("");
   const [dueDate, setDueDate] = useState("");
-  const [dueTime, setDueTime] = useState("");
+
+  // NEW: START + END TIME
+  const [startTime, setStartTime] = useState("");
+  const [endTime, setEndTime] = useState("");
 
   const [editingId, setEditingId] = useState(null);
 
@@ -117,14 +96,8 @@ function App() {
   const [selectedCategory, setSelectedCategory] =
     useState("All Categories");
 
-  const [searchQuery, setSearchQuery] = useState("");
-
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-
-  const [activeNav, setActiveNav] = useState("dashboard");
-
   // =========================
-  // CALENDAR
+  // CALENDAR STATE
   // =========================
 
   const [calendarDate, setCalendarDate] =
@@ -132,6 +105,10 @@ function App() {
 
   const [calendarView, setCalendarView] =
     useState("month");
+
+  // =========================
+  // REF
+  // =========================
 
   const taskInputRef = useRef(null);
 
@@ -189,7 +166,10 @@ function App() {
 
       setTasks(taskList);
     } catch (error) {
-      console.error(error);
+      console.error(
+        "Error fetching tasks:",
+        error
+      );
 
       setErrorMessage(
         "Unable to load your tasks. Please try again."
@@ -235,7 +215,10 @@ function App() {
         googleProvider
       );
     } catch (error) {
-      console.error(error);
+      console.error(
+        "Login error:",
+        error
+      );
 
       if (
         error.code !==
@@ -260,7 +243,10 @@ function App() {
         "Signed out successfully."
       );
     } catch (error) {
-      console.error(error);
+      console.error(
+        "Logout error:",
+        error
+      );
 
       setErrorMessage(
         "Unable to sign out. Please try again."
@@ -269,43 +255,15 @@ function App() {
   };
 
   // =========================
-  // NAVIGATION
-  // =========================
-
-  const scrollToSection = (
-    section,
-    id
-  ) => {
-    setActiveNav(section);
-    setSidebarOpen(false);
-
-    document
-      .getElementById(id)
-      ?.scrollIntoView({
-        behavior: "smooth",
-        block: "start",
-      });
-  };
-
-  const focusTaskInput = () => {
-    document
-      .getElementById("add-task")
-      ?.scrollIntoView({
-        behavior: "smooth",
-        block: "start",
-      });
-
-    setTimeout(() => {
-      taskInputRef.current?.focus();
-    }, 400);
-  };
-
-  // =========================
   // SUBMIT TASK
   // =========================
 
   const handleSubmit = async (event) => {
     event.preventDefault();
+
+    // -------------------------
+    // TASK TITLE VALIDATION
+    // -------------------------
 
     if (!taskTitle.trim()) {
       setErrorMessage(
@@ -317,6 +275,22 @@ function App() {
       return;
     }
 
+    // -------------------------
+    // TIME VALIDATION
+    // -------------------------
+
+    if (
+      startTime &&
+      endTime &&
+      endTime <= startTime
+    ) {
+      setErrorMessage(
+        "End time must be after start time."
+      );
+
+      return;
+    }
+
     const finalCategory =
       category.trim() || "Uncategorized";
 
@@ -324,6 +298,10 @@ function App() {
     setErrorMessage("");
 
     try {
+      // =========================
+      // UPDATE EXISTING TASK
+      // =========================
+
       if (editingId) {
         const existingTask =
           tasks.find(
@@ -339,26 +317,39 @@ function App() {
           editingId
         );
 
-        const updatedTask = {
+        const updatedTaskData = {
           title: taskTitle.trim(),
           category: finalCategory,
+
           completed:
-            existingTask?.completed || false,
+            existingTask?.completed ||
+            false,
+
           dueDate: dueDate || "",
-          dueTime: dueTime || "",
+
+          // NEW
+          startTime: startTime || "",
+          endTime: endTime || "",
+
+          // Keep old dueTime field for
+          // compatibility with old tasks.
+          dueTime:
+            startTime ||
+            existingTask?.dueTime ||
+            "",
         };
 
         await updateDoc(
           taskRef,
-          updatedTask
+          updatedTaskData
         );
 
-        setTasks((previous) =>
-          previous.map((task) =>
+        setTasks((previousTasks) =>
+          previousTasks.map((task) =>
             task.id === editingId
               ? {
                 ...task,
-                ...updatedTask,
+                ...updatedTaskData,
               }
               : task
           )
@@ -367,7 +358,13 @@ function App() {
         showToast(
           "Task updated successfully."
         );
-      } else {
+      }
+
+      // =========================
+      // CREATE NEW TASK
+      // =========================
+
+      else {
         const tasksRef = collection(
           db,
           "users",
@@ -378,9 +375,18 @@ function App() {
         const newTaskData = {
           title: taskTitle.trim(),
           category: finalCategory,
+
           completed: false,
+
           dueDate: dueDate || "",
-          dueTime: dueTime || "",
+
+          // NEW
+          startTime: startTime || "",
+          endTime: endTime || "",
+
+          // Keep dueTime so existing
+          // app logic/data remains compatible.
+          dueTime: startTime || "",
         };
 
         const newTask =
@@ -389,8 +395,8 @@ function App() {
             newTaskData
           );
 
-        setTasks((previous) => [
-          ...previous,
+        setTasks((previousTasks) => [
+          ...previousTasks,
           {
             id: newTask.id,
             ...newTaskData,
@@ -402,9 +408,21 @@ function App() {
         );
       }
 
-      handleCancelEdit();
+      // =========================
+      // CLEAR FORM
+      // =========================
+
+      setEditingId(null);
+      setTaskTitle("");
+      setCategory("");
+      setDueDate("");
+      setStartTime("");
+      setEndTime("");
     } catch (error) {
-      console.error(error);
+      console.error(
+        "Error saving task:",
+        error
+      );
 
       setErrorMessage(
         "Unable to save the task. Please try again."
@@ -415,20 +433,48 @@ function App() {
   };
 
   // =========================
-  // EDIT
+  // EDIT TASK
   // =========================
 
   const handleEdit = (task) => {
     setEditingId(task.id);
-    setTaskTitle(task.title || "");
-    setCategory(
-      task.category || "Uncategorized"
+
+    setTaskTitle(
+      task.title || ""
     );
-    setDueDate(task.dueDate || "");
-    setDueTime(task.dueTime || "");
+
+    setCategory(
+      task.category ||
+      "Uncategorized"
+    );
+
+    setDueDate(
+      task.dueDate || ""
+    );
+
+    // NEW
+    // For old tasks, use dueTime as
+    // the start time.
+    setStartTime(
+      task.startTime ||
+      task.dueTime ||
+      ""
+    );
+
+    setEndTime(
+      task.endTime || ""
+    );
+
     setErrorMessage("");
 
-    focusTaskInput();
+    window.scrollTo({
+      top: 0,
+      behavior: "smooth",
+    });
+
+    setTimeout(() => {
+      taskInputRef.current?.focus();
+    }, 400);
   };
 
   // =========================
@@ -439,6 +485,7 @@ function App() {
     if (!deleteTask) return;
 
     setDeletingId(deleteTask.id);
+    setErrorMessage("");
 
     try {
       const taskRef = doc(
@@ -451,8 +498,8 @@ function App() {
 
       await deleteDoc(taskRef);
 
-      setTasks((previous) =>
-        previous.filter(
+      setTasks((previousTasks) =>
+        previousTasks.filter(
           (task) =>
             task.id !== deleteTask.id
         )
@@ -464,16 +511,19 @@ function App() {
         handleCancelEdit();
       }
 
-      setDeleteTask(null);
-
       showToast(
         "Task deleted successfully."
       );
+
+      setDeleteTask(null);
     } catch (error) {
-      console.error(error);
+      console.error(
+        "Error deleting task:",
+        error
+      );
 
       setErrorMessage(
-        "Unable to delete the task."
+        "Unable to delete the task. Please try again."
       );
     } finally {
       setDeletingId(null);
@@ -481,13 +531,14 @@ function App() {
   };
 
   // =========================
-  // COMPLETE
+  // COMPLETE / UNCOMPLETE
   // =========================
 
   const handleToggleComplete = async (
     task
   ) => {
     setTogglingId(task.id);
+    setErrorMessage("");
 
     try {
       const taskRef = doc(
@@ -498,34 +549,42 @@ function App() {
         task.id
       );
 
-      const completed =
+      const newCompletedState =
         !task.completed;
 
-      await updateDoc(taskRef, {
-        completed,
-      });
+      await updateDoc(
+        taskRef,
+        {
+          completed:
+            newCompletedState,
+        }
+      );
 
-      setTasks((previous) =>
-        previous.map((item) =>
+      setTasks((previousTasks) =>
+        previousTasks.map((item) =>
           item.id === task.id
             ? {
               ...item,
-              completed,
+              completed:
+                newCompletedState,
             }
             : item
         )
       );
 
       showToast(
-        completed
+        newCompletedState
           ? "Task completed."
           : "Task marked as incomplete."
       );
     } catch (error) {
-      console.error(error);
+      console.error(
+        "Error updating task:",
+        error
+      );
 
       setErrorMessage(
-        "Unable to update the task."
+        "Unable to update the task. Please try again."
       );
     } finally {
       setTogglingId(null);
@@ -538,10 +597,15 @@ function App() {
 
   const handleCancelEdit = () => {
     setEditingId(null);
+
     setTaskTitle("");
     setCategory("");
     setDueDate("");
-    setDueTime("");
+
+    setStartTime("");
+    setEndTime("");
+
+    setErrorMessage("");
   };
 
   // =========================
@@ -559,44 +623,22 @@ function App() {
   ].sort();
 
   // =========================
-  // FILTER
+  // FILTER TASKS
   // =========================
 
-  const filteredTasks = tasks
-    .filter((task) => {
-      if (
-        selectedCategory ===
-        "All Categories"
-      ) {
-        return true;
-      }
-
-      return (
-        (task.category?.trim() ||
-          "Uncategorized") ===
-        selectedCategory
+  const filteredTasks =
+    selectedCategory ===
+      "All Categories"
+      ? tasks
+      : tasks.filter(
+        (task) =>
+          (task.category?.trim() ||
+            "Uncategorized") ===
+          selectedCategory
       );
-    })
-    .filter((task) => {
-      const query =
-        searchQuery
-          .trim()
-          .toLowerCase();
-
-      if (!query) return true;
-
-      return (
-        task.title
-          ?.toLowerCase()
-          .includes(query) ||
-        task.category
-          ?.toLowerCase()
-          .includes(query)
-      );
-    });
 
   // =========================
-  // GROUP
+  // GROUP TASKS
   // =========================
 
   const groupedTasks =
@@ -618,10 +660,8 @@ function App() {
     );
 
   // =========================
-  // STATS
+  // TASK STATISTICS
   // =========================
-
-  const totalTasks = tasks.length;
 
   const completedTaskCount =
     tasks.filter(
@@ -629,40 +669,17 @@ function App() {
     ).length;
 
   const pendingTaskCount =
-    totalTasks -
+    tasks.length -
     completedTaskCount;
-
-  const todayString = format(
-    new Date(),
-    "yyyy-MM-dd"
-  );
-
-  const todayTaskCount =
-    tasks.filter(
-      (task) =>
-        task.dueDate === todayString &&
-        !task.completed
-    ).length;
-
-  // =========================
-  // GREETING
-  // =========================
-
-  const hour = new Date().getHours();
-
-  const greeting =
-    hour < 12
-      ? "Good morning"
-      : hour < 18
-        ? "Good afternoon"
-        : "Good evening";
 
   // =========================
   // CALENDAR EVENTS
   // =========================
 
   const calendarEvents = tasks
-    .filter((task) => task.dueDate)
+    .filter(
+      (task) => task.dueDate
+    )
     .map((task) => {
       const [
         year,
@@ -672,40 +689,82 @@ function App() {
         .split("-")
         .map(Number);
 
-      let hour = 0;
-      let minute = 0;
+      // -------------------------
+      // START TIME
+      // -------------------------
 
-      if (task.dueTime) {
+      // New tasks use startTime.
+      // Old tasks use dueTime.
+      const taskStartTime =
+        task.startTime ||
+        task.dueTime ||
+        "";
+
+      let startHour = 0;
+      let startMinute = 0;
+
+      if (taskStartTime) {
         const [
           selectedHour,
           selectedMinute,
-        ] = task.dueTime
+        ] = taskStartTime
           .split(":")
           .map(Number);
 
-        hour = selectedHour;
-        minute = selectedMinute;
+        startHour = selectedHour;
+        startMinute = selectedMinute;
       }
 
       const start = new Date(
         year,
         month - 1,
         day,
-        hour,
-        minute
+        startHour,
+        startMinute
       );
 
-      const end = new Date(
-        start.getTime() +
-        60 * 60 * 1000
-      );
+      // -------------------------
+      // END TIME
+      // -------------------------
+
+      let end;
+
+      if (task.endTime) {
+        const [
+          endHour,
+          endMinute,
+        ] = task.endTime
+          .split(":")
+          .map(Number);
+
+        end = new Date(
+          year,
+          month - 1,
+          day,
+          endHour,
+          endMinute
+        );
+      } else {
+        // Old tasks don't have endTime.
+        // Give them a default duration
+        // of 1 hour.
+        end = new Date(
+          start.getTime() +
+          60 * 60 * 1000
+        );
+      }
 
       return {
         id: task.id,
+
         title: task.title,
+
         start,
         end,
-        completed: task.completed,
+
+        completed:
+          task.completed,
+
         category:
           task.category ||
           "Uncategorized",
@@ -713,7 +772,23 @@ function App() {
     });
 
   // =========================
-  // CALENDAR
+  // CALENDAR NAVIGATION
+  // =========================
+
+  const handleCalendarNavigate = (
+    newDate
+  ) => {
+    setCalendarDate(newDate);
+  };
+
+  const handleCalendarView = (
+    newView
+  ) => {
+    setCalendarView(newView);
+  };
+
+  // =========================
+  // CALENDAR EVENT CLICK
   // =========================
 
   const handleCalendarEventClick = (
@@ -729,36 +804,67 @@ function App() {
     }
   };
 
+  // =========================
+  // CALENDAR STYLES
+  // =========================
+
+  const slotPropGetter = () => {
+    return {
+      style: {
+        backgroundColor:
+          "#1f2027",
+        color: "white",
+        borderTop:
+          "1px solid #333",
+      },
+    };
+  };
+
+  const dayPropGetter = () => {
+    return {
+      style: {
+        backgroundColor:
+          "#1f2027",
+        color: "white",
+      },
+    };
+  };
+
   const eventPropGetter = (
     event
-  ) => ({
-    style: {
-      backgroundColor:
-        event.completed
-          ? "#555"
-          : "#7c5cff",
-      border: "none",
-      borderRadius: "6px",
-      color: "white",
-    },
-  });
+  ) => {
+    return {
+      style: {
+        backgroundColor:
+          event.completed
+            ? "#555"
+            : "#6c5ce7",
+
+        color: "white",
+
+        border: "none",
+
+        borderRadius: "4px",
+
+        padding: "3px 5px",
+
+        cursor: "pointer",
+      },
+    };
+  };
 
   // =========================
-  // INITIAL LOADING
+  // AUTH LOADING SCREEN
   // =========================
 
   if (authLoading) {
     return (
       <div className="loading-page">
         <div className="loading-card">
-          <div className="brand-mark">
-            N
-          </div>
-
           <div className="spinner"></div>
 
           <p>
-            Loading Namjooning...
+            Loading your To-Do List...
           </p>
         </div>
       </div>
@@ -766,50 +872,43 @@ function App() {
   }
 
   // =========================
-  // LOGIN
+  // LOGIN PAGE
   // =========================
 
   if (!user) {
     return (
       <div className="login-page">
-        <div className="login-glow"></div>
 
         <div className="login-box">
-          <div className="brand-mark large">
-            N
+
+          <div className="login-icon">
+            ✓
           </div>
 
-          <span className="login-brand">
-            NAMJOONING
-          </span>
-
           <h1>
-            Your day.
-            <br />
-            <span>Organized.</span>
+            To-Do List
           </h1>
 
           <p>
-            A simple productivity
-            space for your tasks,
-            deadlines and plans.
+            Organize your tasks,
+            stay focused.
           </p>
 
           {errorMessage && (
             <div className="error-message">
-              <AlertCircle size={17} />
               {errorMessage}
             </div>
           )}
 
           <button
-            className="google-button"
+            className="login-button"
             onClick={handleLogin}
           >
             Sign in with Google
-            <ChevronRight size={18} />
           </button>
+
         </div>
+
       </div>
     );
   }
@@ -819,1022 +918,7 @@ function App() {
   // =========================
 
   return (
-    <div className="app-shell">
-
-      {/* MOBILE OVERLAY */}
-
-      {sidebarOpen && (
-        <div
-          className="sidebar-overlay"
-          onClick={() =>
-            setSidebarOpen(false)
-          }
-        />
-      )}
-
-      {/* =========================
-          SIDEBAR
-      ========================= */}
-
-      <aside
-        className={`sidebar ${sidebarOpen
-            ? "sidebar-open"
-            : ""
-          }`}
-      >
-        <div className="sidebar-brand">
-          <div className="brand-mark">
-            N
-          </div>
-
-          <div>
-            <strong>
-              NAMJOONING
-            </strong>
-
-            <span>
-              Productivity space
-            </span>
-          </div>
-        </div>
-
-        <nav className="sidebar-nav">
-          <p className="nav-label">
-            MENU
-          </p>
-
-          <button
-            className={
-              activeNav === "dashboard"
-                ? "nav-item active"
-                : "nav-item"
-            }
-            onClick={() =>
-              scrollToSection(
-                "dashboard",
-                "dashboard"
-              )
-            }
-          >
-            <Home size={19} />
-            Dashboard
-          </button>
-
-          <button
-            className={
-              activeNav === "tasks"
-                ? "nav-item active"
-                : "nav-item"
-            }
-            onClick={() =>
-              scrollToSection(
-                "tasks",
-                "tasks"
-              )
-            }
-          >
-            <ListTodo size={19} />
-            Tasks
-
-            <span className="nav-count">
-              {pendingTaskCount}
-            </span>
-          </button>
-
-          <button
-            className={
-              activeNav === "calendar"
-                ? "nav-item active"
-                : "nav-item"
-            }
-            onClick={() =>
-              scrollToSection(
-                "calendar",
-                "calendar"
-              )
-            }
-          >
-            <CalendarDays size={19} />
-            Calendar
-          </button>
-
-          <button
-            className={
-              activeNav === "categories"
-                ? "nav-item active"
-                : "nav-item"
-            }
-            onClick={() =>
-              scrollToSection(
-                "categories",
-                "categories"
-              )
-            }
-          >
-            <Tags size={19} />
-            Categories
-
-            <span className="nav-count">
-              {categories.length}
-            </span>
-          </button>
-        </nav>
-
-        <div className="sidebar-bottom">
-          <button
-            className="nav-item"
-            onClick={() =>
-              scrollToSection(
-                "settings",
-                "settings"
-              )
-            }
-          >
-            <Settings size={19} />
-            Settings
-          </button>
-
-          <div className="sidebar-user">
-            {user.photoURL ? (
-              <img
-                src={user.photoURL}
-                alt="Profile"
-              />
-            ) : (
-              <div className="avatar">
-                {(
-                  user.displayName ||
-                  user.email ||
-                  "U"
-                )
-                  .charAt(0)
-                  .toUpperCase()}
-              </div>
-            )}
-
-            <div>
-              <strong>
-                {user.displayName ||
-                  "User"}
-              </strong>
-
-              <span>
-                {user.email}
-              </span>
-            </div>
-
-            <button
-              className="logout-icon"
-              onClick={handleLogout}
-              title="Sign out"
-            >
-              <LogOut size={17} />
-            </button>
-          </div>
-        </div>
-      </aside>
-
-      {/* =========================
-          MAIN CONTENT
-      ========================= */}
-
-      <div className="main-shell">
-
-        {/* TOPBAR */}
-
-        <header className="topbar">
-          <button
-            className="mobile-menu"
-            onClick={() =>
-              setSidebarOpen(true)
-            }
-          >
-            <Menu size={22} />
-          </button>
-
-          <div className="topbar-search">
-            <Search size={18} />
-
-            <input
-              type="text"
-              placeholder="Search tasks..."
-              value={searchQuery}
-              onChange={(event) =>
-                setSearchQuery(
-                  event.target.value
-                )
-              }
-            />
-
-            {searchQuery && (
-              <button
-                onClick={() =>
-                  setSearchQuery("")
-                }
-              >
-                <X size={16} />
-              </button>
-            )}
-          </div>
-
-          <button
-            className="quick-add"
-            onClick={focusTaskInput}
-          >
-            <Plus size={18} />
-            <span>Add Task</span>
-          </button>
-        </header>
-
-        <main className="dashboard-main">
-
-          {/* ERROR */}
-
-          {errorMessage && (
-            <div className="global-error">
-              <AlertCircle size={18} />
-
-              <span>
-                {errorMessage}
-              </span>
-
-              <button
-                onClick={() =>
-                  setErrorMessage("")
-                }
-              >
-                <X size={17} />
-              </button>
-            </div>
-          )}
-
-          {/* =========================
-              DASHBOARD
-          ========================= */}
-
-          <section
-            id="dashboard"
-            className="dashboard-section"
-          >
-            <div className="hero">
-              <div>
-                <span className="eyebrow">
-                  YOUR PRODUCTIVITY
-                </span>
-
-                <h1>
-                  {greeting},{" "}
-                  {user.displayName?.split(
-                    " "
-                  )[0] || "there"}{" "}
-                  👋
-                </h1>
-
-                <p>
-                  Here's a quick look at
-                  what's happening today.
-                </p>
-              </div>
-
-              <button
-                className="hero-add"
-                onClick={focusTaskInput}
-              >
-                <Plus size={18} />
-                Create a task
-              </button>
-            </div>
-
-            {/* STATS */}
-
-            <div className="stats-grid">
-
-              <div className="stat-card">
-                <div className="stat-icon purple">
-                  <ClipboardList
-                    size={21}
-                  />
-                </div>
-
-                <div>
-                  <span>
-                    Total tasks
-                  </span>
-
-                  <strong>
-                    {totalTasks}
-                  </strong>
-                </div>
-              </div>
-
-              <div className="stat-card">
-                <div className="stat-icon green">
-                  <CheckCircle2
-                    size={21}
-                  />
-                </div>
-
-                <div>
-                  <span>
-                    Completed
-                  </span>
-
-                  <strong>
-                    {completedTaskCount}
-                  </strong>
-                </div>
-              </div>
-
-              <div className="stat-card">
-                <div className="stat-icon orange">
-                  <Clock3 size={21} />
-                </div>
-
-                <div>
-                  <span>
-                    Pending
-                  </span>
-
-                  <strong>
-                    {pendingTaskCount}
-                  </strong>
-                </div>
-              </div>
-
-              <div className="stat-card">
-                <div className="stat-icon blue">
-                  <CalendarDays
-                    size={21}
-                  />
-                </div>
-
-                <div>
-                  <span>
-                    Due today
-                  </span>
-
-                  <strong>
-                    {todayTaskCount}
-                  </strong>
-                </div>
-              </div>
-
-            </div>
-
-            {/* CATEGORIES */}
-
-            <div
-              id="categories"
-              className="category-overview"
-            >
-              <div className="section-top">
-                <div>
-                  <span className="eyebrow">
-                    ORGANIZE
-                  </span>
-
-                  <h2>
-                    Categories
-                  </h2>
-                </div>
-
-                <button
-                  onClick={() =>
-                    scrollToSection(
-                      "tasks",
-                      "tasks"
-                    )
-                  }
-                >
-                  View tasks
-                  <ChevronRight
-                    size={16}
-                  />
-                </button>
-              </div>
-
-              <div className="category-chips">
-
-                <button
-                  className={
-                    selectedCategory ===
-                      "All Categories"
-                      ? "category-chip active"
-                      : "category-chip"
-                  }
-                  onClick={() => {
-                    setSelectedCategory(
-                      "All Categories"
-                    );
-
-                    scrollToSection(
-                      "tasks",
-                      "tasks"
-                    );
-                  }}
-                >
-                  <FolderOpen size={17} />
-                  All
-                  <span>
-                    {totalTasks}
-                  </span>
-                </button>
-
-                {categories.map(
-                  (item) => {
-                    const count =
-                      tasks.filter(
-                        (task) =>
-                          (task.category?.trim() ||
-                            "Uncategorized") ===
-                          item
-                      ).length;
-
-                    return (
-                      <button
-                        key={item}
-                        className={
-                          selectedCategory ===
-                            item
-                            ? "category-chip active"
-                            : "category-chip"
-                        }
-                        onClick={() => {
-                          setSelectedCategory(
-                            item
-                          );
-
-                          scrollToSection(
-                            "tasks",
-                            "tasks"
-                          );
-                        }}
-                      >
-                        <Tags size={16} />
-                        {item}
-                        <span>
-                          {count}
-                        </span>
-                      </button>
-                    );
-                  }
-                )}
-
-                {categories.length === 0 && (
-                  <p className="no-categories">
-                    Add a task with a category
-                    to see it here.
-                  </p>
-                )}
-
-              </div>
-            </div>
-          </section>
-
-          {/* =========================
-              ADD TASK
-          ========================= */}
-
-          <section
-            id="add-task"
-            className="task-form-section"
-          >
-            <div className="section-top">
-              <div>
-                <span className="eyebrow">
-                  {editingId
-                    ? "EDIT TASK"
-                    : "QUICK ADD"}
-                </span>
-
-                <h2>
-                  {editingId
-                    ? "Edit your task"
-                    : "What needs to be done?"}
-                </h2>
-              </div>
-
-              {editingId && (
-                <button
-                  className="secondary-button"
-                  onClick={
-                    handleCancelEdit
-                  }
-                >
-                  <X size={16} />
-                  Cancel
-                </button>
-              )}
-            </div>
-
-            <form
-              className="task-form"
-              onSubmit={handleSubmit}
-            >
-              <div className="form-field task-title-field">
-                <label>
-                  Task title
-                </label>
-
-                <input
-                  ref={taskInputRef}
-                  type="text"
-                  placeholder="e.g. Complete DSA assignment"
-                  value={taskTitle}
-                  onChange={(event) =>
-                    setTaskTitle(
-                      event.target.value
-                    )
-                  }
-                />
-              </div>
-
-              <div className="form-field">
-                <label>
-                  Category
-                </label>
-
-                <input
-                  type="text"
-                  list="category-options"
-                  placeholder="DSA, Java, Personal..."
-                  value={category}
-                  onChange={(event) =>
-                    setCategory(
-                      event.target.value
-                    )
-                  }
-                />
-
-                <datalist id="category-options">
-                  {categories.map(
-                    (item) => (
-                      <option
-                        value={item}
-                        key={item}
-                      />
-                    )
-                  )}
-                </datalist>
-              </div>
-
-              <div className="form-field">
-                <label>
-                  Due date
-                </label>
-
-                <input
-                  type="date"
-                  value={dueDate}
-                  onChange={(event) =>
-                    setDueDate(
-                      event.target.value
-                    )
-                  }
-                />
-              </div>
-
-              <div className="form-field">
-                <label>
-                  Due time
-                </label>
-
-                <input
-                  type="time"
-                  value={dueTime}
-                  onChange={(event) =>
-                    setDueTime(
-                      event.target.value
-                    )
-                  }
-                />
-              </div>
-
-              <button
-                className="primary-button"
-                type="submit"
-                disabled={saving}
-              >
-                {saving ? (
-                  <>
-                    <span className="button-spinner" />
-                    Saving...
-                  </>
-                ) : (
-                  <>
-                    {editingId ? (
-                      <Check size={18} />
-                    ) : (
-                      <Plus size={18} />
-                    )}
-
-                    {editingId
-                      ? "Update Task"
-                      : "Add Task"}
-                  </>
-                )}
-              </button>
-            </form>
-          </section>
-
-          {/* =========================
-              TASKS
-          ========================= */}
-
-          <section
-            id="tasks"
-            className="tasks-section"
-          >
-            <div className="section-top">
-              <div>
-                <span className="eyebrow">
-                  YOUR WORK
-                </span>
-
-                <h2>
-                  Tasks
-                </h2>
-              </div>
-
-              <select
-                value={selectedCategory}
-                onChange={(event) =>
-                  setSelectedCategory(
-                    event.target.value
-                  )
-                }
-              >
-                <option>
-                  All Categories
-                </option>
-
-                {categories.map(
-                  (item) => (
-                    <option
-                      key={item}
-                      value={item}
-                    >
-                      {item}
-                    </option>
-                  )
-                )}
-              </select>
-            </div>
-
-            <div className="task-summary">
-              <span>
-                {totalTasks} total
-              </span>
-
-              <span>•</span>
-
-              <span>
-                {pendingTaskCount} pending
-              </span>
-
-              <span>•</span>
-
-              <span>
-                {completedTaskCount} completed
-              </span>
-
-              {searchQuery && (
-                <>
-                  <span>•</span>
-                  <span>
-                    Searching "{searchQuery}"
-                  </span>
-                </>
-              )}
-            </div>
-
-            {tasksLoading ? (
-              <div className="empty-state">
-                <div className="spinner" />
-                <h3>
-                  Loading tasks...
-                </h3>
-              </div>
-            ) : tasks.length === 0 ? (
-              <div className="empty-state">
-                <div className="empty-icon">
-                  <ListTodo size={25} />
-                </div>
-
-                <h3>
-                  No tasks yet
-                </h3>
-
-                <p>
-                  Add your first task and
-                  start organizing your day.
-                </p>
-
-                <button
-                  className="primary-button"
-                  onClick={focusTaskInput}
-                >
-                  <Plus size={17} />
-                  Add your first task
-                </button>
-              </div>
-            ) : filteredTasks.length === 0 ? (
-              <div className="empty-state">
-                <div className="empty-icon">
-                  <Search size={25} />
-                </div>
-
-                <h3>
-                  No matching tasks
-                </h3>
-
-                <p>
-                  Try another search or
-                  category.
-                </p>
-
-                <button
-                  className="secondary-button"
-                  onClick={() => {
-                    setSearchQuery("");
-                    setSelectedCategory(
-                      "All Categories"
-                    );
-                  }}
-                >
-                  Clear filters
-                </button>
-              </div>
-            ) : (
-              <div className="category-list">
-                {Object.entries(
-                  groupedTasks
-                ).map(
-                  ([
-                    categoryName,
-                    categoryTasks,
-                  ]) => (
-                    <div
-                      className="category-section"
-                      key={categoryName}
-                    >
-                      <div className="category-heading">
-                        <div>
-                          <FolderOpen
-                            size={18}
-                          />
-
-                          <h3>
-                            {categoryName}
-                          </h3>
-                        </div>
-
-                        <span>
-                          {
-                            categoryTasks.length
-                          }
-                        </span>
-                      </div>
-
-                      <div className="task-list">
-                        {categoryTasks.map(
-                          (task) => (
-                            <article
-                              className={`task-card ${task.completed
-                                  ? "completed"
-                                  : ""
-                                }`}
-                              key={task.id}
-                            >
-                              <button
-                                className="complete-button"
-                                onClick={() =>
-                                  handleToggleComplete(
-                                    task
-                                  )
-                                }
-                                disabled={
-                                  togglingId ===
-                                  task.id
-                                }
-                              >
-                                {task.completed ? (
-                                  <CheckCircle2
-                                    size={23}
-                                  />
-                                ) : (
-                                  <Circle
-                                    size={23}
-                                  />
-                                )}
-                              </button>
-
-                              <div className="task-content">
-                                <h3>
-                                  {task.title}
-                                </h3>
-
-                                <div className="task-meta">
-                                  {task.dueDate && (
-                                    <span>
-                                      <CalendarDays
-                                        size={14}
-                                      />
-                                      {task.dueDate}
-                                    </span>
-                                  )}
-
-                                  {task.dueTime && (
-                                    <span>
-                                      <Clock3
-                                        size={14}
-                                      />
-                                      {task.dueTime}
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-
-                              <div className="task-actions">
-                                <button
-                                  onClick={() =>
-                                    handleEdit(
-                                      task
-                                    )
-                                  }
-                                  disabled={
-                                    deletingId ===
-                                    task.id ||
-                                    togglingId ===
-                                    task.id
-                                  }
-                                  title="Edit"
-                                >
-                                  <Edit3
-                                    size={16}
-                                  />
-                                </button>
-
-                                <button
-                                  className="delete-action"
-                                  onClick={() =>
-                                    setDeleteTask(
-                                      task
-                                    )
-                                  }
-                                  disabled={
-                                    deletingId ===
-                                    task.id ||
-                                    togglingId ===
-                                    task.id
-                                  }
-                                  title="Delete"
-                                >
-                                  <Trash2
-                                    size={16}
-                                  />
-                                </button>
-                              </div>
-                            </article>
-                          )
-                        )}
-                      </div>
-                    </div>
-                  )
-                )}
-              </div>
-            )}
-          </section>
-
-          {/* =========================
-              CALENDAR
-          ========================= */}
-
-          <section
-            id="calendar"
-            className="calendar-section"
-          >
-            <div className="section-top">
-              <div>
-                <span className="eyebrow">
-                  DEADLINES
-                </span>
-
-                <h2>
-                  Calendar
-                </h2>
-              </div>
-
-              <span className="section-note">
-                Click an event to edit it
-              </span>
-            </div>
-
-            <div className="calendar-card">
-              <Calendar
-                localizer={localizer}
-                events={calendarEvents}
-                startAccessor="start"
-                endAccessor="end"
-                date={calendarDate}
-                view={calendarView}
-                onNavigate={setCalendarDate}
-                onView={setCalendarView}
-                onSelectEvent={
-                  handleCalendarEventClick
-                }
-                views={[
-                  "month",
-                  "week",
-                  "day",
-                  "agenda",
-                ]}
-                popup
-                eventPropGetter={
-                  eventPropGetter
-                }
-                style={{
-                  height: "700px",
-                }}
-              />
-            </div>
-          </section>
-
-          {/* =========================
-              SETTINGS
-          ========================= */}
-
-          <section
-            id="settings"
-            className="settings-section"
-          >
-            <div className="section-top">
-              <div>
-                <span className="eyebrow">
-                  ACCOUNT
-                </span>
-
-                <h2>
-                  Settings
-                </h2>
-              </div>
-            </div>
-
-            <div className="settings-card">
-              <div className="settings-profile">
-                {user.photoURL ? (
-                  <img
-                    src={user.photoURL}
-                    alt="Profile"
-                  />
-                ) : (
-                  <div className="large-avatar">
-                    {(
-                      user.displayName ||
-                      user.email ||
-                      "U"
-                    )
-                      .charAt(0)
-                      .toUpperCase()}
-                  </div>
-                )}
-
-                <div>
-                  <strong>
-                    {user.displayName ||
-                      "User"}
-                  </strong>
-
-                  <span>
-                    {user.email}
-                  </span>
-                </div>
-              </div>
-
-              <button
-                className="logout-button"
-                onClick={handleLogout}
-              >
-                <LogOut size={17} />
-                Sign out
-              </button>
-            </div>
-          </section>
-
-        </main>
-
-        {/* FOOTER */}
-
-        <footer className="app-footer">
-          <span>
-            © 2026 Namjooning
-          </span>
-
-          <span>
-            Stay organized. Stay focused.
-          </span>
-        </footer>
-      </div>
+    <div className="app-container">
 
       {/* =========================
           TOAST
@@ -1842,21 +926,749 @@ function App() {
 
       {toast.show && (
         <div
-          className={`toast ${toast.type === "error"
-              ? "toast-error"
-              : ""
-            }`}
+          className={`toast toast-${toast.type}`}
         >
-          <CheckCircle2 size={18} />
-          {toast.message}
+          <span className="toast-icon">
+            {toast.type === "success"
+              ? "✓"
+              : "!"}
+          </span>
+
+          <span>
+            {toast.message}
+          </span>
         </div>
       )}
+
+      {/* =========================
+          HEADER
+      ========================= */}
+
+      <header className="app-header">
+
+        <div>
+          <h1>
+            ✓ To-Do List
+          </h1>
+
+          <p>
+            Welcome,{" "}
+            {user.displayName ||
+              user.email}
+          </p>
+        </div>
+
+        <button
+          className="signout-button"
+          onClick={handleLogout}
+        >
+          Sign Out
+        </button>
+
+      </header>
+
+      <main>
+
+        {/* =========================
+            ERROR MESSAGE
+        ========================= */}
+
+        {errorMessage && (
+          <div className="global-error">
+
+            <span>⚠</span>
+
+            <span>
+              {errorMessage}
+            </span>
+
+            <button
+              onClick={() =>
+                setErrorMessage("")
+              }
+            >
+              ×
+            </button>
+
+          </div>
+        )}
+
+        {/* =========================
+            ADD / EDIT TASK
+        ========================= */}
+
+        <section className="task-form-section">
+
+          <div className="section-heading">
+
+            <div>
+
+              <span className="section-label">
+                {editingId
+                  ? "TASK MANAGEMENT"
+                  : "GET STARTED"}
+              </span>
+
+              <h2>
+                {editingId
+                  ? "Edit Task"
+                  : "Add New Task"}
+              </h2>
+
+            </div>
+
+            {editingId && (
+              <button
+                type="button"
+                className="top-cancel-button"
+                onClick={
+                  handleCancelEdit
+                }
+              >
+                Cancel Edit
+              </button>
+            )}
+
+          </div>
+
+          <form
+            onSubmit={handleSubmit}
+            className="task-form"
+          >
+
+            {/* =========================
+                TASK
+            ========================= */}
+
+            <div className="form-field">
+
+              <label>
+                Task
+                <span className="required">
+                  *
+                </span>
+              </label>
+
+              <input
+                ref={taskInputRef}
+                type="text"
+                placeholder="What needs to be done?"
+                value={taskTitle}
+                onChange={(event) =>
+                  setTaskTitle(
+                    event.target.value
+                  )
+                }
+              />
+
+            </div>
+
+            {/* =========================
+                CATEGORY
+            ========================= */}
+
+            <div className="form-field">
+
+              <label>
+                Category
+              </label>
+
+              <input
+                type="text"
+                list="category-options"
+                placeholder="e.g. DSA, Java, Personal"
+                value={category}
+                onChange={(event) =>
+                  setCategory(
+                    event.target.value
+                  )
+                }
+              />
+
+              <datalist id="category-options">
+
+                {categories.map(
+                  (item) => (
+                    <option
+                      value={item}
+                      key={item}
+                    />
+                  )
+                )}
+
+              </datalist>
+
+            </div>
+
+            {/* =========================
+                DUE DATE
+            ========================= */}
+
+            <div className="form-field">
+
+              <label>
+                Due Date
+              </label>
+
+              <input
+                type="date"
+                value={dueDate}
+                onChange={(event) =>
+                  setDueDate(
+                    event.target.value
+                  )
+                }
+              />
+
+            </div>
+
+            {/* =========================
+                START TIME
+            ========================= */}
+
+            <div className="form-field">
+
+              <label>
+                Start Time
+              </label>
+
+              <input
+                type="time"
+                value={startTime}
+                onChange={(event) =>
+                  setStartTime(
+                    event.target.value
+                  )
+                }
+              />
+
+            </div>
+
+            {/* =========================
+                END TIME
+            ========================= */}
+
+            <div className="form-field">
+
+              <label>
+                End Time
+              </label>
+
+              <input
+                type="time"
+                value={endTime}
+                onChange={(event) =>
+                  setEndTime(
+                    event.target.value
+                  )
+                }
+              />
+
+            </div>
+
+            {/* =========================
+                FORM BUTTONS
+            ========================= */}
+
+            <div className="form-buttons">
+
+              <button
+                type="submit"
+                className="add-button"
+                disabled={saving}
+              >
+
+                {saving ? (
+                  <>
+                    <span className="button-spinner"></span>
+
+                    {editingId
+                      ? "Updating..."
+                      : "Adding..."}
+                  </>
+                ) : (
+                  editingId
+                    ? "Update Task"
+                    : "Add Task"
+                )}
+
+              </button>
+
+              {editingId && (
+                <button
+                  type="button"
+                  className="cancel-button"
+                  onClick={
+                    handleCancelEdit
+                  }
+                  disabled={saving}
+                >
+                  Cancel
+                </button>
+              )}
+
+            </div>
+
+          </form>
+
+        </section>
+
+        {/* =========================
+            TASKS
+        ========================= */}
+
+        <section className="tasks-section">
+
+          <div className="tasks-header">
+
+            <div>
+
+              <span className="section-label">
+                YOUR WORK
+              </span>
+
+              <h2>
+                Tasks
+              </h2>
+
+            </div>
+
+            <select
+              value={selectedCategory}
+              onChange={(event) =>
+                setSelectedCategory(
+                  event.target.value
+                )
+              }
+              disabled={tasksLoading}
+            >
+
+              <option>
+                All Categories
+              </option>
+
+              {categories.map(
+                (item) => (
+                  <option
+                    value={item}
+                    key={item}
+                  >
+                    {item}
+                  </option>
+                )
+              )}
+
+            </select>
+
+          </div>
+
+          {/* =========================
+              TASK SUMMARY
+          ========================= */}
+
+          {!tasksLoading &&
+            tasks.length > 0 && (
+              <div className="task-summary">
+
+                <span>
+                  <strong>
+                    {tasks.length}
+                  </strong>{" "}
+                  {tasks.length === 1
+                    ? "task"
+                    : "tasks"}
+                </span>
+
+                <span className="summary-dot">
+                  •
+                </span>
+
+                <span>
+                  <strong>
+                    {pendingTaskCount}
+                  </strong>{" "}
+                  pending
+                </span>
+
+                <span className="summary-dot">
+                  •
+                </span>
+
+                <span>
+                  <strong>
+                    {completedTaskCount}
+                  </strong>{" "}
+                  completed
+                </span>
+
+              </div>
+            )}
+
+          {/* =========================
+              LOADING
+          ========================= */}
+
+          {tasksLoading ? (
+
+            <div className="empty-state">
+
+              <div className="spinner"></div>
+
+              <h3>
+                Loading your tasks...
+              </h3>
+
+              <p>
+                Just a moment.
+              </p>
+
+            </div>
+
+          ) : tasks.length === 0 ? (
+
+            /* =========================
+                EMPTY STATE
+            ========================= */
+
+            <div className="empty-state">
+
+              <div className="empty-icon">
+                ✓
+              </div>
+
+              <h3>
+                No tasks yet
+              </h3>
+
+              <p>
+                Add your first task
+                and start organizing
+                your day.
+              </p>
+
+              <button
+                className="empty-action"
+                onClick={() => {
+
+                  taskInputRef.current?.focus();
+
+                  window.scrollTo({
+                    top: 0,
+                    behavior: "smooth",
+                  });
+
+                }}
+              >
+                + Add Your First Task
+              </button>
+
+            </div>
+
+          ) : filteredTasks.length ===
+            0 ? (
+
+            /* =========================
+                FILTER EMPTY STATE
+            ========================= */
+
+            <div className="empty-state">
+
+              <div className="empty-icon">
+                📁
+              </div>
+
+              <h3>
+                No tasks in this category
+              </h3>
+
+              <p>
+                Try selecting another
+                category.
+              </p>
+
+              <button
+                className="empty-action"
+                onClick={() =>
+                  setSelectedCategory(
+                    "All Categories"
+                  )
+                }
+              >
+                View All Tasks
+              </button>
+
+            </div>
+
+          ) : (
+
+            /* =========================
+                TASK GROUPS
+            ========================= */
+
+            <div className="category-list">
+
+              {Object.entries(
+                groupedTasks
+              ).map(
+                ([
+                  categoryName,
+                  categoryTasks,
+                ]) => (
+
+                  <div
+                    className="category-section"
+                    key={categoryName}
+                  >
+
+                    <div className="category-title">
+
+                      <span className="category-icon">
+                        📁
+                      </span>
+
+                      <h3>
+                        {categoryName}
+                      </h3>
+
+                      <span className="category-count">
+                        {
+                          categoryTasks.length
+                        }
+                      </span>
+
+                    </div>
+
+                    <div className="task-list">
+
+                      {categoryTasks.map(
+                        (task) => (
+
+                          <div
+                            className={`task-item ${task.completed
+                                ? "completed"
+                                : ""
+                              }`}
+                            key={task.id}
+                          >
+
+                            <div className="task-left">
+
+                              <input
+                                type="checkbox"
+                                checked={
+                                  task.completed ||
+                                  false
+                                }
+                                disabled={
+                                  togglingId ===
+                                  task.id
+                                }
+                                onChange={() =>
+                                  handleToggleComplete(
+                                    task
+                                  )
+                                }
+                              />
+
+                              <div className="task-info">
+
+                                <h3>
+                                  {task.title}
+                                </h3>
+
+                                {task.dueDate && (
+                                  <p className="due-info">
+
+                                    📅{" "}
+                                    {task.dueDate}
+
+                                    {(task.startTime ||
+                                      task.dueTime) &&
+                                      ` • ${task.startTime ||
+                                      task.dueTime
+                                      }`}
+
+                                    {task.endTime &&
+                                      ` - ${task.endTime}`}
+
+                                  </p>
+                                )}
+
+                              </div>
+
+                            </div>
+
+                            <div className="task-actions">
+
+                              <button
+                                onClick={() =>
+                                  handleEdit(
+                                    task
+                                  )
+                                }
+                                disabled={
+                                  deletingId ===
+                                  task.id ||
+                                  togglingId ===
+                                  task.id
+                                }
+                              >
+                                Edit
+                              </button>
+
+                              <button
+                                className="delete-button"
+                                onClick={() =>
+                                  setDeleteTask(
+                                    task
+                                  )
+                                }
+                                disabled={
+                                  deletingId ===
+                                  task.id ||
+                                  togglingId ===
+                                  task.id
+                                }
+                              >
+                                Delete
+                              </button>
+
+                            </div>
+
+                          </div>
+
+                        )
+                      )}
+
+                    </div>
+
+                  </div>
+
+                )
+              )}
+
+            </div>
+
+          )}
+
+        </section>
+
+        {/* =========================
+            CALENDAR
+        ========================= */}
+
+        <section className="calendar-section">
+
+          <div className="calendar-heading">
+
+            <div>
+
+              <span className="section-label">
+                DEADLINES
+              </span>
+
+              <h2>
+                Calendar
+              </h2>
+
+            </div>
+
+            <p>
+              Click a task to edit it.
+            </p>
+
+          </div>
+
+          <div className="calendar-container">
+
+            <Calendar
+              localizer={localizer}
+
+              events={calendarEvents}
+
+              startAccessor="start"
+              endAccessor="end"
+
+              date={calendarDate}
+
+              view={calendarView}
+
+              onNavigate={
+                handleCalendarNavigate
+              }
+
+              onView={
+                handleCalendarView
+              }
+
+              onSelectEvent={
+                handleCalendarEventClick
+              }
+
+              views={[
+                "month",
+                "week",
+                "day",
+                "agenda",
+              ]}
+
+              popup={true}
+
+              /*
+               * NEW:
+               * 30-minute time slots.
+               */
+              step={30}
+
+              timeslots={2}
+
+              slotPropGetter={
+                slotPropGetter
+              }
+
+              dayPropGetter={
+                dayPropGetter
+              }
+
+              eventPropGetter={
+                eventPropGetter
+              }
+
+              style={{
+                height: "700px",
+              }}
+            />
+
+          </div>
+
+        </section>
+
+      </main>
+
+      {/* =========================
+          FOOTER
+      ========================= */}
+
+      <footer className="app-footer">
+
+        <p>
+          Stay organized. Stay focused.
+        </p>
+
+        <button
+          onClick={handleLogout}
+        >
+          Sign Out
+        </button>
+
+      </footer>
 
       {/* =========================
           DELETE MODAL
       ========================= */}
 
       {deleteTask && (
+
         <div
           className="modal-overlay"
           onClick={() =>
@@ -1864,36 +1676,41 @@ function App() {
             setDeleteTask(null)
           }
         >
+
           <div
             className="delete-modal"
             onClick={(event) =>
               event.stopPropagation()
             }
           >
+
             <div className="modal-icon">
-              <Trash2 size={23} />
+              !
             </div>
 
             <h2>
-              Delete task?
+              Delete Task?
             </h2>
 
             <p>
               Are you sure you want to
-              delete{" "}
+              delete
+
               <strong>
+                {" "}
                 "{deleteTask.title}"
               </strong>
               ?
             </p>
 
-            <span>
+            <p className="modal-warning">
               This action cannot be undone.
-            </span>
+            </p>
 
             <div className="modal-actions">
+
               <button
-                className="secondary-button"
+                className="modal-cancel"
                 onClick={() =>
                   setDeleteTask(null)
                 }
@@ -1905,28 +1722,32 @@ function App() {
               </button>
 
               <button
-                className="danger-button"
+                className="modal-delete"
                 onClick={handleDelete}
                 disabled={
                   deletingId !== null
                 }
               >
+
                 {deletingId ? (
                   <>
-                    <span className="button-spinner" />
+                    <span className="button-spinner"></span>
                     Deleting...
                   </>
                 ) : (
-                  <>
-                    <Trash2 size={16} />
-                    Delete
-                  </>
+                  "Delete Task"
                 )}
+
               </button>
+
             </div>
+
           </div>
+
         </div>
+
       )}
+
     </div>
   );
 }
